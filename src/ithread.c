@@ -258,28 +258,44 @@ IWorkerThread * IWorkerThreadControllerAddWorkerThread(IWorkerThreadController *
     return itd;
 }
 
+/// @brief This function defines how a worker thread is controlled.  If is passed to pthread_create then the 
+///         worker thread is started (triggered by calling WorkerThreadControllerStart() ).
+/// @param data Pointer to a valid worker thread data structure.
+/// @return NULL.
 void * IWorkerThreadRun(void * data)
 {
+    // Make sure the worker thread data structure is valid and in its initialised state.
     IWorkerThread * itd = (IWorkerThread *) data;
-    if (!IWorkerThreadIsValid(itd) || itd->state != IThreadStateInitialised) return NULL;
-    else itd->state = IThreadStateRunning;
-    while (itd->jobs_run < itd->jobs_count && itd->state == IThreadStateRunning)
+    if (!IWorkerThreadIsValid(itd) || itd->state != IThreadStateInitialised) return NULL; // It's not so exit immediately.
+    else itd->state = IThreadStateRunning; // It is, so set the worker thread state to running.
+    // Perform processing on any jobs that have been allocated to the thread until it should exit.
+    while (((itd->flag_exit_on_no_jobs && itd->jobs_run < itd->jobs_count) || !itd->flag_exit_on_no_jobs) && itd->state == IThreadStateRunning)
     {
+        // Depending on the priority of the worker thread it can process one or more jobs at a time.
         for (int j = 0; j < itd->priority && itd->current_job && itd->state == IThreadStateRunning; j++) {
+            // Record the job processing start time.
             itd->current_job->start_time = time(NULL);
+            // Process the job.
             itd->threadMainFunction(itd->current_job);
+            // Record the job processing end time.
             itd->current_job->end_time = time(NULL);
+            // Make the job as done.
             itd->current_job->state = IThreadJobStateDone;
+            // Record the total time it took to process the job in the thread's job run time history (this is used for smart thread killing).
             itd->job_run_time_history[itd->jobs_run % 10] = itd->current_job->end_time - itd->current_job->start_time;
             if (itd->jobSuccessCallbackFunction) {
                 itd->jobSuccessCallbackFunction(itd->current_job);
             }
+            // Get the next available job.
             itd->current_job = itd->current_job->next_job;
+            // Increment the number of jobs processed.
             itd->jobs_run++;
         }
+        // have a little bit of a sleep to stop the thread hogging all the CPU core's processing time.
         IThreadSleep(20);
     }
 
+    // Now the thread has done processing work (or a stop/kill request has been received), we can set it's state appropriately.
     switch (itd->state) {
         case IThreadStateStopRequested : itd->state = IThreadStateStopped; break;
         case IThreadStateKillRequested : itd->state = IThreadStateKilled; break;
@@ -287,8 +303,10 @@ void * IWorkerThreadRun(void * data)
         default: {}
     }
 
+    // Record the time the thread exited.
     itd->end_time = time(NULL);
 
+    // Exit the thread and return NULL.
     pthread_exit(NULL);
     return NULL;
 }
