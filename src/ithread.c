@@ -311,15 +311,25 @@ void * IWorkerThreadRun(void * data)
     return NULL;
 }
 
+/// @brief Will try to create a worker thread data structure with pointers to functions used for processing jobs.
+/// @param workFunction Pointer to a function that will do the main processing work for a job.
+/// @param successFunction Pointer to a function that will handle a job after it has been processed (by workFunction).
+/// @param failureFunction Pointer to a function that will handle a job then it has failed to process (by workFunction).
+/// @param itc Pointer to the parent worker thread controller data structure.
+/// @return Pointerto a worker thread data structure (IWorkerThread) or NULL if the data structure can't be created.
 IWorkerThread * IWorkerThreadCreate(  void (* workFunction)(IWorkerThreadJob *),
                                 void (*successFunction)(IWorkerThreadJob *),
                                 void (*failureFunction)(IWorkerThreadJob *),
                                 IWorkerThreadController * itc)
 {
+    // Make sure the calling function has passed in a valid worker thread controller pointer.  If not, exit immediately.
     if (!IWorkerThreadControllerIsValid(itc)) return NULL;
 
+    // Try to reserve memory for a worker thread data structure.
     IWorkerThread * itd = (IWorkerThread *) malloc(sizeof(IWorkerThread));
     if (itd) {
+        // We have managed to reserve memory, so initialise the data structure, recording the pointers to the
+        // processing functions that have been passed in. 
         itd->struct_id = ITHREAD_DATA_STRUCT_ID;
         itd->start_time = itd->end_time = 0;
         itd->state = IThreadStateInitialised;
@@ -334,27 +344,46 @@ IWorkerThread * IWorkerThreadCreate(  void (* workFunction)(IWorkerThreadJob *),
         itd->controller = itc;
         itd->flag_exit_on_no_jobs = false;
     }
+
+    // Return pointer to the worker thread data structure or NULL if we couldn't allocate memory for it.
     return itd;
 }
 
+/// @brief Makes the current thread of execution sleep for the given number of milliseconds.
+/// @param milliseconds Milliseconds to sleep.  If value is negative, the absolute value will be used (i.e. -100 = 100).
 void IThreadSleep(long milliseconds)
 {
+    // If the sleep period is zero milliseconds, we can return immediately.
     if (milliseconds == 0) return;
+
+    // Take the absolute value of milliseconds if the original value was negative.
     if (milliseconds < 0) milliseconds = -milliseconds;
     
+    // Create a timespec with the appropriate values for the sleep operation.
     struct timespec ts;
     ts.tv_nsec = (milliseconds % 1000) * 1000000;
     ts.tv_sec = milliseconds / 1000;
 
+    // This second timespec is never used, but it required be the nanosleep function.
     struct timespec rem;
+
+    // Cause the current exection thread to sleep for the required number of milliseconds.
     nanosleep(&ts, &rem);
 }
 
+/// @brief Adds a job to the given worker thread's queue.
+/// @param itd Pointer to the worker thread data structure.
+/// @param job_data Pointer to the job data to be added to the queue. 
+/// @return Pointer to the worker thread job data structure that holds the job data.
 IWorkerThreadJob * IWorkerThreadAddJob(IWorkerThread * itd, void * job_data)
 {
+    // Make sure the calling function has passed in valid parameter values.
     if (!IWorkerThreadIsValid(itd) || !job_data) return NULL;
+
+    // Try to create a worker thread job data structure.
     IWorkerThreadJob * itj = (IWorkerThreadJob *) malloc(sizeof(IWorkerThreadJob));
     if (itj) {
+        // We've managed to allocate memory for the data structure, so initialise it.
         itj->id = itd->jobs_count;
         itj->struct_id = ITHREAD_DATA_STRUCT_ID;
         itj->state = IThreadJobStateInitialised;
@@ -364,17 +393,28 @@ IWorkerThreadJob * IWorkerThreadAddJob(IWorkerThread * itd, void * job_data)
         itj->next_job = NULL;
         itj->data = job_data;
 
+        // Add the pointer to the worker thread job data structure to the end of the jobs queue.
         if (!itd->first_job) itd->first_job = itj;
         else {
             itd->last_job->next_job = itj;
         }
+
+        // Update the worker thread data structure so that the last job to do points to the newly created job data structure.
         itd->last_job = itj;
         if (itd->current_job == NULL) itd->current_job = itj;
+
+        // Increment the worker thread data structure's job count value.
         itd->jobs_count++;
     }
+
+    // Return a pointer to the newly created worker thread job data structure or NULL if one couldn't be created.
     return itj;
 }
 
+/// @brief Gets the average time a job has taken to process.  The average is taken from the times accumulated over the past 'n'
+///         jobs where 'n' is in the range 1..10.
+/// @param itd Pointer to worker thread data structure.
+/// @return time_t data structure holding the average processing time (or 0 if no jobs have been processed).
 time_t IWorkerThreadGetAverageJobTime(IWorkerThread * itd)
 {
     if (!IWorkerThreadIsValid(itd) || itd->state != IThreadStateRunning || itd->jobs_run == 0) return 0;
@@ -384,29 +424,32 @@ time_t IWorkerThreadGetAverageJobTime(IWorkerThread * itd)
     return total_jobs_time / MAX_JOB_INDEX;
 }
 
+/// @brief Indicates if a worker thread has finished.  At this stage, the thread can do no more work, either exiting naturally, or
+///         having been stopped/killed by an external request.
+/// @param iwt Pointer to worker thread data structure.
+/// @return True if the thread has finished processing and have exited, or has been stopped or killed.
 bool IWorkerThreadDone(IWorkerThread * iwt)
 {
+    // Make sure we've got a valid pointer to a worker thread data structure.
     if (!IWorkerThreadIsValid(iwt)) return true;
+
+    // CHeck the state of the thread and return true if the thread can no longer process any more work.
     if (iwt->state == IThreadStateUnusable || iwt->state == IThreadStateDone ||
         iwt->state == IThreadStateKilled || iwt->state == IThreadStateStopped) return true;
+
+    // Otherwise, return false, indicating the thread is still running.
     return false;
 }
 
 bool IWorkerThreadControllerChildThreadsDone(IWorkerThreadController * itc)
 {
     bool controller_invalid = !IWorkerThreadControllerIsValid(itc);
-    if (controller_invalid) {
-        // printf("Worker threads check controller invalid.\n");
-        return true;
-    } else {
-        // printf("Controller valid.\n");
-    }
+    if (controller_invalid) return true;
     int threads_done = 0;
     for (int t = 0; t < itc->threads_count; t++) {
         IWorkerThread * itd = itc->threads[t];
         if (IWorkerThreadDone(itd)) threads_done++;
     }
-    // printf("Threads done: %i.\n", threads_done);
     return threads_done == itc->threads_count;
 }
 
